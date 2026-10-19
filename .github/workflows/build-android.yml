@@ -5,12 +5,16 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'Masahaq-Scanner-Project.zip'
+      - '**.zip'
       - '.github/workflows/build-android.yml'
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -27,18 +31,48 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Extract project
+      - name: Find and extract project ZIP
+        shell: bash
         run: |
-          unzip Masahaq-Scanner-Project.zip -d project
-          cd project/Masahaq-Scanner
+          set -e
+          ZIP_FILE="$(find . -type f -iname '*.zip' -not -path './.git/*' -print -quit)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in the repository."
+            echo "Upload the scanner project ZIP to GitHub first."
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP_FILE"
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          PACKAGE_FILE="$(find extracted -type f -name package.json -print -quit)"
+
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json was not found inside the ZIP."
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$PACKAGE_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+
+      - name: Install dependencies and prepare Android
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
           npm install
           npm run build
           npx cap add android
           npx cap sync android
 
-      - name: Build APK
+      - name: Build debug APK
+        shell: bash
         run: |
-          cd project/Masahaq-Scanner/android
+          set -e
+          cd "$PROJECT_DIR/android"
           chmod +x gradlew
           ./gradlew assembleDebug
 
@@ -46,4 +80,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Masahaq-Scanner-APK
-          path: project/Masahaq-Scanner/android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
